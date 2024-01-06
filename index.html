@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>three.js vr - panorama with depth</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <link type="text/css" rel="stylesheet" href="main.css">
+</head>
+<body>
+    
+    <label>Diffuse Map: <input type="file" id="diffuseInput" accept="image/*" /></label>
+    <label>Depth Map: <input type="file" id="depthInput" accept="image/*" /></label>
+    <button id="toggleControl">Switch to Free Look</button>
+    <button id="prevImage">Previous Image</button>
+    <button id="nextImage">Next Image</button>
+
+    <div id="container"></div>
+
+
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./three.module.js",
+                "three/addons/": "./"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { VRButton } from './VRButton.js';
+		import { PointerLockControls } from './PointerLockControls.js';
+
+        let camera, scene, renderer, sphere, clock;
+        let diffuseTexture = null;
+        let depthTexture = null;
+        let texturesLoaded = { diffuse: false, depth: false };
+		let controlsActive = false;
+		let controls;
+		
+		// Example images
+		const exampleImages = [
+			{ diffuse: 'images/diffuse1.jpg', depth: 'images/depth1.jpg' },
+			{ diffuse: 'images/diffuse2.jpg', depth: 'images/depth2.jpg' },
+			{ diffuse: 'images/diffuse3.jpg', depth: 'images/depth3.jpg' }
+		];
+
+
+        let currentImageIndex = 0;
+
+        init();
+        animate();
+		
+
+        function init() {
+            const container = document.getElementById('container');
+
+            clock = new THREE.Clock();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x101010);
+
+            const light = new THREE.AmbientLight(0xffffff, 3);
+            scene.add(light);
+
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1, 2000);
+            scene.add(camera);
+			
+			controls = new PointerLockControls(camera, document.body);
+
+			// Add toggle button event listener
+			document.getElementById('toggleControl').addEventListener('click', toggleControls);
+
+
+            // Create the panoramic sphere geometry
+            const panoSphereGeo = new THREE.SphereGeometry(6, 512, 512);
+
+            // Create the panoramic sphere material
+			const panoSphereMat = new THREE.MeshStandardMaterial({
+				side: THREE.BackSide,
+				displacementScale: -3.4,
+				metalness: 0,
+				roughness: 1
+			});
+
+            // Create the panoramic sphere mesh
+            sphere = new THREE.Mesh(panoSphereGeo, panoSphereMat);
+
+            document.getElementById('diffuseInput').addEventListener('change', function (e) {
+                loadTexture(e.target.files[0], 'diffuse');
+            });
+
+            document.getElementById('depthInput').addEventListener('change', function (e) {
+                loadTexture(e.target.files[0], 'depth');
+            });
+			
+            document.getElementById('prevImage').addEventListener('click', () => changeImage(-1));
+            document.getElementById('nextImage').addEventListener('click', () => changeImage(1));
+
+            // Add keyboard event listener
+            document.addEventListener('keydown', onDocumentKeyDown);
+
+            // Load the first example image by default
+            loadExampleImage(currentImageIndex);
+
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, precision: "highp" });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            renderer.xr.setReferenceSpaceType('local');
+			renderer.gammaOutput = true;
+			renderer.gammaFactor = 2.2;
+
+            container.appendChild(renderer.domElement);
+			
+
+            document.body.appendChild(VRButton.createButton(renderer));
+
+            window.addEventListener('resize', onWindowResize);
+        }
+		
+		function toggleControls() {
+			if (controlsActive) {
+				controls.unlock();
+				controlsActive = false;
+				document.getElementById('toggleControl').textContent = 'Switch to Free Look';
+			} else {
+				controls.lock();
+				controlsActive = true;
+				document.getElementById('toggleControl').textContent = 'Switch to Auto Pan';
+			}
+		}
+		
+        function changeImage(direction) {
+            currentImageIndex += direction;
+            if (currentImageIndex < 0) currentImageIndex = exampleImages.length - 1;
+            if (currentImageIndex >= exampleImages.length) currentImageIndex = 0;
+            loadExampleImage(currentImageIndex);
+        }
+		
+		function loadExampleImage(index) {
+			const imageSet = exampleImages[index];
+            loadTexture(imageSet.diffuse, 'diffuse', true);
+            loadTexture(imageSet.depth, 'depth', true);
+        }
+
+		function loadTexture(path, type, isExample = false) {
+            const loader = new THREE.TextureLoader();
+            const texture = loader.load(path);
+            texture.minFilter = THREE.NearestFilter;
+            texture.generateMipmaps = false;
+			texture.encoding = THREE.sRGBEncoding;
+
+            if (type === 'diffuse') {
+                diffuseTexture = texture;
+                texturesLoaded.diffuse = true;
+            } else if (type === 'depth') {
+                depthTexture = texture;
+                texturesLoaded.depth = true;
+            }
+
+            if (texturesLoaded.diffuse && texturesLoaded.depth) {
+                sphere.material.map = diffuseTexture;
+                sphere.material.displacementMap = depthTexture;
+                sphere.material.needsUpdate = true;
+                if (!scene.children.includes(sphere)) {
+                    scene.add(sphere);
+                }
+            }
+        }
+
+		
+		function onDocumentKeyDown(event) {
+            switch (event.keyCode) {
+                case 37: // left arrow key
+                    changeImage(-1);
+                    break;
+                case 39: // right arrow key
+                    changeImage(1);
+                    break;
+            }
+        }
+		
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            renderer.setAnimationLoop(render);
+        }
+
+		function render() {
+			if (renderer.xr.isPresenting === false) {
+				const time = clock.getElapsedTime();
+				sphere.position.x = Math.sin(time) * 0.1;
+				sphere.position.z = Math.cos(time) * 0.1;
+				sphere.position.y = Math.cos(time) * 0.14;
+				if (!controlsActive) {
+					sphere.rotation.y += 0.001;
+				}
+			}
+			else
+			{
+				sphere.position.x = Math.sin(time) = 0;
+				sphere.position.z = Math.cos(time) = 0;
+				sphere.position.y = Math.cos(time) = 0;
+			}
+
+			renderer.render(scene, camera);
+		}
+    </script>
+</body>
+</html>
